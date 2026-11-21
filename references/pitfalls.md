@@ -1,0 +1,68 @@
+# Pitfalls
+
+Short symptom → action lines. Add new ones here; drive-wide rules also go into `assets/templates/CLAUDE.md`.
+
+## Drives and file systems
+- **exFAT has large clusters** (often 1 MB): every small file costs at least a cluster plus its `._` companion. `node_modules` and a CapCut cache can take tens of GB on disk while holding little data. Keep small-file things on the computer: reel-studio keeps `node_modules` in `~/.cache/reel-studio/npmroot/`, the map keeps frames in `~/.cache/video-map/work`.
+- **`._*` files on exFAT are normal** (AppleDouble). Never count, move or delete them; they follow a rename by themselves. APFS has none, but a copy from APFS to exFAT gets its own `._`. Count files with `! -name '._*'` and without `node_modules`.
+- **SQLite cannot write on exFAT** (no locking). `поиск.sqlite` is built in `~/.cache/video-map/work` and copied over; readers open it with `immutable=1`.
+- **Volume names.** A name can end in a space (`"/Volumes/MyDrive "`): always quote, and never rename a volume — CapCut drafts and projects hold absolute paths to it. Two drives may once have had the same name, and old projects may point at a drive with a look-alike name (Latin vs Cyrillic letters). Resolve old paths **by file name**, never by drive name.
+- **Attached but not mounted.** The drive shows in `diskutil list external` but not in `/Volumes`: `diskutil mount diskNsM`.
+- **Claude's safety check** blocks `rm` of a top-level folder on a drive and reads relative `rm` paths against the drive root. Always pass absolute paths; leave empty top-level shells to the user: Finder → Trash, or `rm -rf "/Volumes/<drive>/<folder>"` in their Terminal.
+
+## Sorting and moving
+- **Only renames inside one drive.** A move between drives is a copy plus a delete, needs space and time and loses the undo journal. The sorter refuses an inbox on another device.
+- **The sorter removes inbox subfolders it empties**, including ones that hold only `._` files. Feed it the subfolders that contain clips, not the root of an old folder; delete the rest after a separate yes.
+- The sorter needs an existing `Source Video` folder (`--root`) even for `--dry-run`.
+- **Day places drift around every flight.** Places taken from old folder or trip names are wrong for the day or two around each transfer: the camera clock stays in the old time zone, and the old trip folder swallows the travel days. After mapping a new drive, ask for place doubts per day and propose one rename list; travel days get «A — B».
+- **Places guessed from one frame are often wrong.** Speech and signs beat a frame: when labelling days, read the transcript (or wait for the map) and mark guesses as guesses.
+- **The camera clock stays on the last trip's time zone.** The 05:00 rule then puts after-midnight clips into the wrong day. After every flight check a spoken time or the light against the file time.
+- **Undated clips** (camera clock reset to year 2000): put them into an inbox subfolder `ГГГГ-ММ-ДД место`. Find the real day by a phone clip from the same folder and by comparing frames; if a clock is off by whole days, the next camera day is the next real day. Messenger files named with 13 digits are Unix milliseconds of the save time — a day hint, not a shooting time.
+- **Profile not readable** (`*_10bit-unknown`, `*_CodeNN`): dump the first djmd record (`_protobuf_fields` in sort_inbox.py), compare with clips of known profiles, add the code to `DJI_COLOR_CODES` or the field to `DJI_COLOR_FIELD`. Pocket 3 has no profile field. Re-encoded files (DJI Mimo, CapCut, messengers) lose djmd; Action 5 Pro 10-bit BT.709 without djmd is treated as D-Log M (`TEN_BIT_709_PROFILE` — change it if the user shoots HLG). Action 4 D-Log M in field 2.4.1 is unverified — check the first such clip.
+- **iPhone HDR sorted as `iPhone_Normal`**: for some iPhone `.MOV` files exiftool returns no `TransferCharacteristics`, while ffprobe sees `arib-std-b67` (HLG). If an `iPhone_Normal` folder looks suspicious, check `ffprobe -show_entries stream=color_transfer`; moving such clips to `iPhone_HDR` is a source move — yes first.
+- **A rare code** (e.g. one Pocket 4P clip tagged D-Log2 among hundreds of D-Log) — check its LUT before editing.
+- **Action cameras in an underwater housing write a wrong depth** into djmd: take depth from the dive computer's FIT file; align clocks by correlation.
+- **Moving breaks references**: `assets/camera` symlinks, absolute paths in CapCut drafts, plan / cut JSON, `NOTES.md`. Drafts and projects on *another* drive or the computer may point at the drive being moved: before a migration grep `/Volumes/<drive>/` in every text file of the other drives and in the CapCut drafts. Apply the path map until the text stops changing (folder → archive → `final/` chains). Back up texts first; never edit render logs.
+- **Cyrillic paths can differ in Unicode form**: a folder name created by Finder may be NFD while scripts write NFC, so a plain replace and `grep -F` find 0 hits and «old path: 0» passes falsely. Compare and replace after `unicodedata.normalize('NFC', …)`, and treat «replaced 0» in a file that you know holds the path as a failure.
+- **A project whose sources were deleted keeps them as plain lines in `sources.txt`**, with a `#` note that they are gone. `catalog_all.py` reads those lines to mark the project «Не трогать»; commented-out paths make its `reel/public/shots`, `work/tmp`, `out/prev` look regenerable — while they are the only copy of that footage.
+- **Filmora `.wfp` is a zip**; each `ProjectFolder/Medias/*/media.json` has `file_name` with the full clip path. Paths inside are not rewritten — Filmora asks to locate files; point it at the day folder.
+- **Copies on another drive are backups.** `verify_dups.py` looks for originals on the same drive only; delete only same-drive copies. Merging drives is a separate decision.
+- **A clip deleted from a day folder can survive only in `_дубликаты`** (a card dropped into the inbox twice). Re-run `verify_dups.py` right before deleting `_дубликаты`; it must report every copy matched and 0 without an original.
+
+## CapCut
+- **Active drafts live on the computer**: `~/Movies/CapCut/User Data/Projects/com.lveditor.draft` (the real path is in the plist `com.capcut.CapCut` → `currentCustomDraftPath`). Other draft folders (an old copy on a drive, a custom location) are read only when listed in `VIDEO_LIBRARY_CAPCUT_DRAFTS` (separated by `:`). After any clip move: `fix_capcut_paths.py` (dry run), then `--apply` with CapCut closed.
+- **Encrypted drafts**: paths cannot be read or fixed, only relinked inside CapCut. Name them in the drive's `CLAUDE.md`.
+- `fix_capcut_paths.py` rewrites a dead path only when the file name is found exactly once on the connected drives — connect every drive first, or a path to an offline drive stays unresolved (or, with a same-named file elsewhere, could match the wrong one).
+- CapCut `User Data/Cache` can be cleared in CapCut (Settings → Cache), except items the drafts reference.
+
+## Tools on several drives
+- **Drift.** Each drive carries its own `_tools`. `scripts/selfcheck.py` shows drift; `install_to_drive.py` updates older copies and refuses to overwrite newer ones.
+- **Files shared with reel-studio.** `mem_guard.py` ships in both skills — keep the newer one in both. `vlm_describe.py` is not shared: reel-studio's version imports its own `common.py`; the drive keeps a standalone version that `video_map.py` runs under the guard.
+- `sort_inbox.py`, `video_map.py`, `vm_brief.py`, `vm_search.py`, `vm_annotate.py` find `Source Video` / `_карта` from their own folder. Run them from `<drive>/Source Video/_tools/` (the sorter elsewhere only with explicit `--root` and `--inbox`).
+
+## Video map
+- **Every heavy model runs under `mem_guard.py`.** Local models can freeze a Mac with unified memory. The guard kills the command's process tree above its ceiling (Qwen 11 GB, speech 4 GB) or when less than the reserve is left (4 GB; 3 GB for speech) and exits 137. Another app or session may be using memory: wait and re-run the stage — finished work is skipped. Never lower the limits; on a Mac with less than 16 GB skip the descriptions stage.
+- **The guard reads `kern.memorystatus_level`**, not `vm_stat`: free + inactive underestimates the reserve several times while a model loads (the file cache with the weights is reclaimable).
+- **pyobjc does not return the distance from `computeDistance`** (the out-parameter comes back None): compute L2 between the feature-print vectors from `data()` (float32 when `elementType` is 1, else float64).
+- **GigaAM in onnxruntime: the CoreML execution provider fails** on parts of the graph — run on CPU.
+- **Without VAD, ASR invents text on wind and engine noise.** Silero VAD first, then GigaAM only on speech.
+- **LOG footage without a LUT is grey and models read it worse**: frames are extracted with the clip's LUT from reel-studio's `common.lut_for()`; without reel-studio the map runs without LUT.
+- **A clip with no profile in the file must not get a guessed LUT.** For an unknown camera `common.lut_for()` falls back to a default cube; on 8-bit Normal or 10-bit BT.709 footage that crushes or oversaturates the frames. `video_map.py` drops any "default" LUT («без LUT: …» in `extract.json`); only djmd, HDR tags or a known camera pick a cube.
+- **A clip without an audio track**: `extract.json` has `"audio": false`, speech prints that there is nothing to do, sounds are skipped — correct, not a failure; say «в файле нет звука» in the day notes. `extract()` treats a clip as done only when `audio.wav` exists, so every rerun of the extract stage re-extracts such a clip (harmless); for a re-run use `--only vlm,assemble`. A talking take with no sound is usually ○.
+- **Qwen3-VL gets small things wrong** (a motorbike becomes a cyclist). Its text is raw material; day summaries, ratings and moments are Claude's job, checked against the transcript and frames.
+- **Re-running `assemble` drops `day_note`** from `клипы.json` (clip-level `summary/tags/rating/moments/note` are kept). After a rebuild, run `vm_annotate.py` again with the `_day` entry.
+- **`assemble` lists only clips present in the day folder**: after a clip is deleted, the next rebuild drops it from `клипы.json` and the search (its sheet stays in `листы/`). Record deletions in the «Удалено» section of `день.md` before rebuilding — that is the memory that outlives the source.
+- **The map folder is named after the day folder.** Renaming a day folder after mapping without the map makes a rebuild create a second `_карта/<new name>/`, while `vm_brief.py` / `vm_annotate.py` pick the first folder starting with the date. Rename days only with `rename_days.py СПИСОК.tsv` (dry run by default): it renames the day and `_карта/<day>`, rewrites `клипы.json`, `_catalog.csv` and CapCut drafts. Then `rename_days_projects.py <same list>` rewrites the paths in `Video Archive` / `Video Production` projects (texts incl. JSON `\uXXXX` escapes and symlinks; render logs untouched). Afterwards fix stale place sentences in `день.md` and labels in `day_note` by hand (backup first).
+- **Day-annotation agents cannot wait for the map**: an agent started before its days are built stops with nothing written. Start each group's agent after the map log shows the last day of the group done (a Monitor on the log), or resume it day by day. Groups of 4–13 days per agent work well.
+- **`_без даты` folders** are skipped by `video_map.py` (`day_dir` needs a date). Map them with a wrapper that imports `video_map`, replaces `day_dir` for a pseudo-day and calls `main()`; `vm_annotate.py "_без даты" пометки.json` then works (it matches the folder by prefix).
+- **The catalog misses usage it cannot see**: clips referenced only by derived names (`0138b` cut from `0138`), project parts that were cleaned away, archived videos that keep only `final/`. Write a `sources.txt` for such projects, and never offer ○ clips of those days for deletion without checking.
+- `vm_annotate.py` needs the day's `клипы.json` to exist.
+- `vm_search.py` searches every connected drive's `поиск.sqlite` and keeps a copy in `~/.cache/video-map/поиск/<диск>.sqlite`, so an offline drive is still searched (rows marked offline). Ranks from different drives are roughly comparable, not exact; with a small `--limit` a big drive can crowd out the others — use `--disk`.
+- **One date on two drives shares a work folder** (`~/.cache/video-map/work/<ГГГГ-ММ-ДД>` has no drive in its name). Per-clip work is safe while clip names differ; `run_vlm` merges jobs by id.
+
+## Decisions that are always the user's
+- Day places, which projects are finished, which camera gets which LUT.
+- Every rename of a day or camera folder, every source move, every deletion (each with its own yes).
+- Recompressing or shrinking footage: only when the user brings it up.
+- Clips used in any project are never deletion candidates: they rebuild the video.
+- Taste in footage (angles, takes the user dislikes): note it in the drive's `CLAUDE.md` when the user says it, and rate clips with it in mind.
