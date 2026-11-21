@@ -9,6 +9,7 @@ Reads <clip>/audio.wav (16 kHz mono), writes <clip>/speech.json:
 Only what the VAD took for speech is recognised: on wind, engine noise and silence the model does not invent text.
 Models load once for the whole list. Finished speech.json files are skipped.
 """
+import argparse
 import json
 import os
 import sys
@@ -18,7 +19,11 @@ MODEL = "gigaam-v3-e2e-rnnt"     # with punctuation and normalisation (numbers a
 
 
 def main(dirs):
-    import onnx_asr
+    try:
+        import onnx_asr
+    except ImportError:
+        sys.exit("vm_speech.py: onnx_asr is not in this python — run it with ~/.cache/reel-studio/gigvenv/bin/python "
+                 "(reel-studio's deps.py --install)")
     todo = [d for d in dirs if os.path.exists(os.path.join(d, "audio.wav")) and not os.path.exists(os.path.join(d, "speech.json"))]
     if not todo:
         print("SPEECH_DONE (nothing to do)")
@@ -45,4 +50,7 @@ def main(dirs):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], epilog=__doc__.split("\n\n", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("dirs", nargs="+", metavar="workdir", help="a clip's work folder with audio.wav")
+    main(ap.parse_args().dirs)

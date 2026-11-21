@@ -12,7 +12,8 @@ edits only, clip files are not touched):
   2. Source Video/_карта/<day>                → new name;
   3. _карта/<day>/клипы.json: folder and path of the clips;
   4. Source Video/_catalog.csv: path;
-  5. CapCut drafts: absolute paths <drive>/Source Video/<day>/… (--no-capcut: leave them alone). Draft folders:
+  5. CapCut drafts: absolute paths <drive>/Source Video/<day>/… (--no-capcut: leave them alone), also when the draft
+     names the drive under another mount root (/Volumes/<drive>/… in a Mac draft edited on Linux). Draft folders:
      CapCut's default folder on the Mac (~/Movies/CapCut/User Data/Projects/com.lveditor.draft) and every folder
      listed in the VIDEO_LIBRARY_CAPCUT_DRAFTS environment variable (separated by «:»).
 Copies of every edited file before the edit — Source Video/_logs/rename_days_<time>_backup/<absolute path>.
@@ -36,9 +37,55 @@ TEXT_EXT = {".json", ".tmp", ".bak"}
 DAY_RX = re.compile(r"^\d{4}-\d{2}-\d{2} \S.*$")
 
 
+def volumes():
+    """Folders the drives are mounted in: $VIDEO_LIBRARY_VOLUMES (os.pathsep list), else the existing ones of /Volumes
+    (macOS), /media/$USER and /run/media/$USER (Linux desktops), /media (drives mounted without a user folder), /mnt.
+    A drive is a folder right inside one of them, or the folder itself when it directly holds Source Video; its name may
+    end in a space (copy it exactly). The same function is inlined in every tool that looks for drives."""
+    env = os.environ.get("VIDEO_LIBRARY_VOLUMES")
+    if env:
+        roots = env.split(os.pathsep)
+    else:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        if not user:
+            try:
+                import pwd
+                user = pwd.getpwuid(os.getuid()).pw_name
+            except (ImportError, KeyError):
+                pass
+        roots = ["/Volumes"] + (["/media/" + user, "/run/media/" + user] if user else []) + ["/media", "/mnt"]
+    out = []
+    for r in roots:
+        r = r.rstrip("/")
+        if r and r not in out and os.path.isdir(r):
+            out.append(r)
+    return out
+
+
+MOUNT_RX = r'/Volumes|/run/media/[^/"\\]+|/media/[^/"\\]+|/media|/mnt'   # where drives sit on macOS / Linux, any user
+DRIVE_TOP = ("Source Video", "Video Production", "Video Archive", "_docs")   # folders right in a drive's root
+
+
+def drive_of(path):
+    """(mount root, drive folder name as on disk) of a path on a drive — under volumes() or any usual mount root
+    (a path written on another computer, e.g. /Volumes/… in a Mac's CapCut draft) — else None. A folder that directly
+    holds Source Video is the drive itself: /media/<Drive>/… mounted without a user folder, /mnt/<Drive>/…"""
+    best = None
+    for rx in [re.escape(r) for r in volumes()] + MOUNT_RX.split("|"):     # the longest mount root wins:
+        m = re.match(r"(%s)/([^/]+)(?:/|$)" % rx, path)                     # /media/<user>/X over /media/<user>
+        if m and (not best or len(m.group(1)) > len(best[0])):
+            best = m.group(1), m.group(2)
+    if not best:
+        return None
+    root, name = best
+    if root.count("/") > 1 and (name in DRIVE_TOP or os.path.isdir(os.path.join(root, "Source Video"))):
+        root, name = os.path.dirname(root), os.path.basename(root)
+    return root, name
+
+
 def capcut_draft_dirs():
     """[(label, folder)]: CapCut's default draft folder on the Mac ("Mac") and every folder listed in
-    VIDEO_LIBRARY_CAPCUT_DRAFTS (os.pathsep-separated); label = the volume name for /Volumes/<name>/…, else the path."""
+    VIDEO_LIBRARY_CAPCUT_DRAFTS (os.pathsep-separated); label = the drive name for a folder on a drive, else the path."""
     out = [("Mac", os.path.expanduser("~/Movies/CapCut/User Data/Projects/com.lveditor.draft"))]
     for p in os.environ.get("VIDEO_LIBRARY_CAPCUT_DRAFTS", "").split(os.pathsep):
         if not p:
@@ -46,8 +93,8 @@ def capcut_draft_dirs():
         p = os.path.normpath(os.path.expanduser(p))
         if p in (t for _, t in out):
             continue
-        parts = p.split(os.sep)
-        out.append((parts[2].strip() if len(parts) > 3 and parts[1] == "Volumes" else p, p))
+        d = drive_of(p)
+        out.append((d[1].strip() if d else p, p))
     return out
 
 
@@ -191,6 +238,9 @@ def main():
         plan.append((rel, new_rel, old, new))
     run = Run(disk, a.apply)
     prefix = os.path.join(sv, "")                     # "<drive>/Source Video/"
+    # the same folder as a draft written on another computer names it: /Volumes/<drive>/… (Mac), /media/<user>/<drive>/…
+    d = drive_of(os.path.abspath(disk))
+    prefixes = [prefix] + sorted({r + "/" + d[1] + "/Source Video/" for r in ["/Volumes"] + volumes()} - {prefix} if d else set())
 
     # what refers to the days: клипы.json, _catalog.csv, drafts
     def sub_rel(s):
@@ -223,13 +273,13 @@ def main():
         if nr != r["path"]:
             r["path"], n_cat = nr, n_cat + 1
 
-    abs_map = [(prefix + o + "/", prefix + n + "/") for o, n, _, _ in plan]
+    abs_map = [(pre + o + "/", pre + n + "/") for pre in prefixes for o, n, _, _ in plan]
     drafts = {}                                       # (label, draft) → number of paths
     draft_edits = []
     for label, top, p in ([] if a.no_capcut else draft_files()):
         with open(p, encoding="utf-8", errors="surrogateescape") as f:
             s = f.read()
-        if prefix not in s:
+        if not any(pre in s for pre in prefixes):
             continue
         ns, cnt = s, 0
         for o, n in abs_map:
@@ -298,8 +348,8 @@ def main():
     missing = 0
     for label, top, p in ([] if a.no_capcut else draft_files()):
         with open(p, encoding="utf-8", errors="surrogateescape") as f:
-            for m in re.finditer(r'"(%s[^"\\]+)"' % re.escape(prefix), f.read()):
-                if not os.path.exists(m.group(1)):
+            for m in re.finditer(r'"((?:%s)[^"\\]+)"' % "|".join(re.escape(x) for x in prefixes), f.read()):
+                if not os.path.exists(prefix + m.group(1).split("/Source Video/", 1)[1]):
                     missing += 1
     print("\nDone. Journal: %s\nBackups: %s" % (run.journal, run.backup))
     print("Check: day folders not in place %d, paths to this drive in drafts that do not exist %d" % (len(bad), missing))

@@ -23,7 +23,16 @@ Built-in classifier (303 classes), 3-s windows without overlap, compiled from `s
 - **Choice:** Qwen3-VL-8B-Instruct, 4-bit, through `mlx-vlm` (model folder `~/.cache/reel-studio/models/qwen3-vl-8b-4bit`, ≈ 5.4 GB; `mlx-community/Qwen3-VL-8B-Instruct-4bit`). The most common recommendation for local video understanding on Apple Silicon ([mlx-vlm](https://github.com/Blaizzy/mlx-vlm)); free, nothing leaves the computer, answers in Russian.
 - **Input:** chunks ≤ 150 s; 3–5 best frames of the chunk (448 px) + its transcript + OCR; strict JSON answer (`что, где, кадр, теги, годится`).
 - **Cost:** pilot peak 7.5 GB, 5–6 s per chunk; MLX limits 10 GB memory / 1 GB cache inside, the guard's ceiling 11 GB outside.
-- **Limits:** wrong in details (a motorbike ride becomes a cyclist). So the day — story, ratings, best moments, place — is Claude's job, reading transcripts, descriptions and sheets.
+- **Limits:** wrong in details (a boat trip becomes a ferry, a market a shop). So the day — story, ratings, best moments, place — is Claude's job, reading transcripts, descriptions and sheets.
+
+## Other platforms (Linux, CPU or NVIDIA)
+The map runs off the Mac with open models through reel-studio's `engines.py` (choice per capability, details and licences in reel-studio's `references/engines.md`):
+- **Scenes:** DINOv2-small CLS embeddings, cosine distance (threshold calibrated with `vm_frames.py --calib`, stored in `frames.json`).
+- **Labels:** SigLIP 2 zero-shot over Vision's own identifiers, so search words stay the same; **text:** RapidOCR with an East-Slavic recogniser; **faces:** YuNet; **people:** RT-DETR (COCO person); **aesthetics:** none (Vision only).
+- **Sounds:** AST fine-tuned on AudioSet (527 classes, snake_case labels like `wind_noise_microphone`, so the wind count still works).
+- **Descriptions:** Qwen3-VL through transformers — 4B in bf16 on a CPU (≈ 9 GB RAM, minutes per chunk), 8B on an NVIDIA GPU — or a GGUF through `llama-mtmd-cli` (llama.cpp; quantised, the lightest on a CPU).
+- **Decode:** CUDA when ffmpeg has it, else software (slower extract). Speech is the same everywhere (GigaAM on onnxruntime CPU).
+Quality is close for scenes, OCR and faces; labels and sounds use other vocabularies' scores, and descriptions from the 4B model are plainer. Not measured on a full library yet.
 
 ## Ruled out
 - **Apple Foundation Models** (the on-device model can look at images): not available on every Mac, and no Russian.
@@ -31,7 +40,7 @@ Built-in classifier (303 classes), 3-s windows without overlap, compiled from `s
 - **Ready-made tools:** [Edit Mind](https://www.producthunt.com/p/edit-mind-3/edit-mind-4) (open, local), Jumper, search in [Premiere](https://community.adobe.com/announcements-732/now-released-search-panel-finds-the-shot-faster-with-visual-search-311756) and DaVinci Resolve 21 find shots inside an editor. They leave no memory on the drive that survives deleting the sources and give no «what can be deleted» ratings; Edit Mind also samples a fixed frame per second and spends about 4.4 machine-hours per hour of video. Resolve's search may still help while editing.
 
 ## Memory guard
-A Mac with unified memory can freeze when a model takes all of it. `mem_guard.py` polls every 0.5 s: the command's process-tree footprint (macOS `footprint`, includes GPU memory) and the Mac's available memory from `kern.memorystatus_level` (`vm_stat` free + inactive underestimates it several times while weights load, because the file cache is reclaimable). Above the ceiling or below the reserve it kills the process group and exits 137. Ceilings used: Qwen `--max-gb 11 --min-free-gb 4`, speech `--max-gb 4 --min-free-gb 3`. reel-studio ships the same file.
+A Mac with unified memory can freeze when a model takes all of it (a Linux box swaps the same way). `mem_guard.py` polls every 0.5 s: the command's process-tree footprint (macOS `footprint`, includes GPU memory) and the Mac's available memory from `kern.memorystatus_level` (`vm_stat` free + inactive underestimates it several times while weights load, because the file cache is reclaimable). On Linux: PSS of the process tree from `/proc/<pid>/smaps_rollup`, `MemAvailable` and the cgroup v2 limit, NVIDIA memory via `nvidia-smi` with `--max-vram-gb`. Above the ceiling or below the reserve it kills the process group and exits 137. Ceilings used (`VLM_GUARD_GB` in `video_map.py`): Qwen `--max-gb 11` on MLX and llama.cpp, `--max-gb 14` on transformers (bf16 weights of the 4B model alone are ≈ 9 GB), `--min-free-gb 4`; speech `--max-gb 4 --min-free-gb 3`. reel-studio ships the same file.
 
 ## Speed and size (pilot)
-147 clips, ~5 h of video, 214 GB → ~30 min of machine time for all stages, bound by disk reads and Qwen. A 4 TB library (~2200 clips) is ~4–5 h of machine time; the map itself takes ~1–2 GB per TB of footage (data is grouped per day because every small file costs a whole cluster on exFAT).
+≈ 150 clips, ~5 h of video, ~200 GB → ~30 min of machine time for all stages, bound by disk reads and Qwen. A 4 TB library (~2200 clips) is ~4–5 h of machine time; the map itself takes ~1–2 GB per TB of footage (data is grouped per day because every small file costs a whole cluster on exFAT).

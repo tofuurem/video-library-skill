@@ -8,6 +8,7 @@
 Ratings: ★ — use (story, best shots), ◐ — reserve (cutaways, may come in handy), ○ — can be deleted (faulty, empty, duplicate).
 Writes into _карта/<day>/клипы.json (video_map.py keeps these fields on rebuild) and rebuilds the search index.
 """
+import argparse
 import json
 import os
 import subprocess
@@ -18,7 +19,10 @@ MAP = os.path.join(os.path.dirname(HERE), "_карта")
 
 
 def main(day, path):
-    d = next((x for x in sorted(os.listdir(MAP)) if x.startswith(day)), None)
+    d = next((x for x in sorted(os.listdir(MAP)) if x.startswith(day)), None) if os.path.isdir(MAP) else None
+    if not d or not os.path.isfile(os.path.join(MAP, d, "клипы.json")):
+        sys.exit("vm_annotate.py: no %s in %s — build the day first (video_map.py %s)" % (
+            os.path.join("_карта", (d or day + "…"), "клипы.json"), os.path.dirname(MAP), day))
     cj = os.path.join(MAP, d, "клипы.json")
     doc = json.load(open(cj, encoding="utf-8"))
     ann = json.load(open(path, encoding="utf-8"))
@@ -39,4 +43,9 @@ def main(day, path):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], epilog=__doc__.split("\n\n", 1)[1],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("day", help="YYYY-MM-DD (or the start of a day folder name, e.g. «_без даты»)")
+    ap.add_argument("annotations", help="пометки.json")
+    a = ap.parse_args()
+    main(a.day, a.annotations)

@@ -66,7 +66,14 @@ DJI_COLOR_FIELD = {"dvtm_ac204.proto": "2.4.1",            # Action 5 Pro
 DJI_COLOR_CODES = {0: "Normal", 2: "D-Log", 9: "HLG", 19: "D-Log-M", 22: "D-Log2"}
 # Fallback when there is no djmd track (e.g. the file was re-encoded in DJI Mimo):
 # what «10-bit, BT.709» means for a camera. Action 5 Pro records Normal in 8-bit only.
+# Override for a user who shoots HLG: --ten-bit-709 "Action5Pro=HLG" or the env var
+# VIDEO_LIBRARY_TEN_BIT_709 (same «Cam=Profile[,Cam=Profile]» syntax; empty = no fallback).
 TEN_BIT_709_PROFILE = {"Action5Pro": "D-Log-M"}
+TEN_BIT_709_ENV = "VIDEO_LIBRARY_TEN_BIT_709"
+# ffprobe colour names → exiftool's numeric codes. Some iPhone .MOV files carry no colour
+# tags exiftool can read, while the HEVC stream itself says HLG / PQ (ffprobe sees it).
+FFPROBE_TRC = {"smpte2084": 16, "arib-std-b67": 18}
+FFPROBE_PRIMARIES = {"bt2020": 9}
 # Folder names for the profiles DJI writes into DjiCameraColorGammaSxS
 GAMMA_NAMES = {"Rec.709": "Normal", "Rec.2100 HLG": "HLG", "HLG": "HLG",
                "D-Log M": "D-Log-M", "D-LogM": "D-Log-M"}
@@ -151,6 +158,18 @@ def pix_fmt(path):
                         "-show_entries", "stream=pix_fmt", "-of", "csv=p=0", path],
                        capture_output=True, text=True)
     return (r.stdout.strip().splitlines() or [""])[0].strip(",")
+
+
+def ffprobe_color(path):
+    """→ (TransferCharacteristics, ColorPrimaries) as exiftool codes, read from the video stream; None if not tagged."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                        "-show_entries", "stream=color_transfer,color_primaries", "-of", "json", path],
+                       capture_output=True, text=True)
+    try:
+        s = (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
+    except ValueError:
+        return None, None
+    return FFPROBE_TRC.get(s.get("color_transfer")), FFPROBE_PRIMARIES.get(s.get("color_primaries"))
 
 
 def _varint(b, i):
@@ -265,6 +284,9 @@ def video_profile(cam, meta, path):
         return GAMMA_NAMES.get(gamma.strip(), safe(gamma))
     trc, prim = meta.get("TransferCharacteristics"), meta.get("ColorPrimaries")
     if cam == "iPhone":
+        if trc is None:                       # exiftool saw no colour tags: ask the stream itself
+            trc, f_prim = ffprobe_color(path)
+            prim = f_prim if prim is None else prim
         if trc in (16, 18):
             return "HDR"
         if prim == 9:
@@ -716,6 +738,18 @@ def undo(log_path):
     log("Moved back: %d files" % back)
 
 
+def parse_ten_bit(spec):
+    """«Action5Pro=HLG,Pocket3=Normal» → {"Action5Pro": "HLG", "Pocket3": "Normal"}; "" → {}."""
+    out = {}
+    for part in filter(None, (p.strip() for p in spec.split(","))):
+        cam, sep, prof = (x.strip() for x in part.partition("="))
+        if not sep or not cam or not prof:
+            log("--ten-bit-709 / %s: expected «Camera=Profile», got %r" % (TEN_BIT_709_ENV, part))
+            sys.exit(1)
+        out[cam] = safe(prof)
+    return out
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description="Sort _inbox into days and cameras")
@@ -728,7 +762,16 @@ def main():
     ap.add_argument("--labels", help="file of «YYYY-MM-DD<TAB>label» lines naming new days")
     ap.add_argument("--no-compare", action="store_true",
                     help="with --dry-run: treat same name and size as a duplicate, without reading the bytes")
+    ap.add_argument("--ten-bit-709", metavar="CAM=PROFILE[,…]",
+                    help="profile for DJI 10-bit BT.709 clips without djmd (default Action5Pro=D-Log-M; "
+                         "also env %s; empty = none, they go to *_10bit-unknown)" % TEN_BIT_709_ENV)
     a = ap.parse_args()
+    spec = a.ten_bit_709 if a.ten_bit_709 is not None else os.environ.get(TEN_BIT_709_ENV)
+    if spec is not None:
+        TEN_BIT_709_PROFILE.clear()
+        TEN_BIT_709_PROFILE.update(parse_ten_bit(spec))
+        log("10-bit BT.709 without a profile: %s" % (", ".join("%s → %s" % kv for kv in TEN_BIT_709_PROFILE.items())
+                                                     or "no fallback (→ *_10bit-unknown)"))
 
     if a.undo:
         undo(a.undo)

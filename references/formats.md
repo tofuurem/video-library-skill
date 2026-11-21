@@ -19,7 +19,9 @@ Everything a drive holds, field by field. User-facing names are Russian and stay
 <Диск>/
 ├ CLAUDE.md                      entry point for Claude (template: assets/templates/CLAUDE.md)
 ├ ВСЕ ДИСКИ.md, ВСЕ ДИСКИ — каталог.csv    written by catalog_all.py to every connected drive
-├ _docs/                         guides for the user: КАК ВЕСТИ ПРОЕКТЫ.md, (ПЛАН ПЕРЕЕЗДА.md while a migration runs)
+├ _docs/                         guides for the user: КАК ВЕСТИ ПРОЕКТЫ.md, КАРТА ВИДЕО.md (both from templates),
+│ │                              ИНВЕНТАРИЗАЦИЯ.md (the look step), ИДЕИ РОЛИКОВ.md (ideas from the map),
+│ │                              (ПЛАН ПЕРЕЕЗДА.md while a migration runs)
 │ └ история/                     finished migration plans: ПЛАН ПЕРЕЕЗДА.md + ПЛАН ПЕРЕЕЗДА — список файлов.tsv
 ├ Source Video/
 │ ├ _inbox/                      new footage goes here → Разложить.command; КАК ПОЛЬЗОВАТЬСЯ.txt
@@ -51,10 +53,12 @@ The library part of the root is only `CLAUDE.md` and `ВСЕ ДИСКИ.*`. Othe
 | `Pocket3_10bit-unknown` | Osmo Pocket 3: no profile field in djmd |
 | `<Cam>_10bit-unknown` | DJI 10-bit BT.709 without a readable profile — resolve before editing |
 | `<Cam>_CodeNN` | unknown djmd code NN — add it to `DJI_COLOR_CODES` |
-| `iPhone_Normal`, `iPhone_HDR`, `iPhone_Apple-Log` | by transfer/primaries tags (HLG/PQ → HDR, primaries 9 → Apple Log) |
+| `iPhone_Normal`, `iPhone_HDR`, `iPhone_Apple-Log` | by transfer/primaries tags (HLG/PQ → HDR, primaries 9 / BT.2020 → Apple Log); exiftool first, ffprobe `color_transfer` / `color_primaries` when exiftool sees no transfer tag |
 | `<Cam>_Photo`, `Other_Photo`, `iPhone_Photo` | photos; iPhone Live Photo videos (≤ 4.5 s) sit next to their photo |
 | `Screen` | screen recordings and screenshots (by file name) |
 | `Other` | unknown camera (re-encoded / messenger videos) |
+
+**10-bit BT.709 without djmd** (a re-encoded DJI file): `TEN_BIT_709_PROFILE` maps the camera to a profile — by default `Action5Pro` → `D-Log-M` (Action 5 Pro records Normal in 8-bit only); other DJI cameras go to `<Cam>_10bit-unknown`. Override per run with `sort_inbox.py --ten-bit-709 "Action5Pro=HLG"` (comma-separated `Камера=Профиль`; an empty value `--ten-bit-709=` turns the fallback off, so such clips land in `*_10bit-unknown`), or for every run from a shell with the env var `VIDEO_LIBRARY_TEN_BIT_709` (same syntax; the option wins). `Разложить.command` uses the default unless the variable is set in the environment it runs in. The run prints the mapping when it is not the default.
 
 DJI profile codes (djmd track, first record): **0 Normal, 2 D-Log, 9 HLG, 19 D-Log M, 22 D-Log2**. Field per firmware (`DJI_COLOR_FIELD` in sort_inbox.py): `dvtm_ac204.proto` (Action 5 Pro) 2.4.1, `dvtm_ac203.proto` (Action 4) 2.4.1, `dvtm_osmo_pocket_4.proto` (Pocket 4/4P) 2.2.3.1. Pocket 4P also writes the text tag `DjiCameraColorGammaSxS` (D-Log / Rec.709 / Rec.2100 HLG / D-Log2), which wins when present. Camera name from `Encoder` (`DJI OsmoPocket4P`, `DJI OsmoAction5 Pro`, `DJI OsmoPocket4`, `DJI NEO`…) or `Model`.
 
@@ -175,7 +179,7 @@ Back to work («верни в работу»): `project/` → `Video Production/
 ```
 (Lists shortened.)
 
-Machine fields (video_map.py): `file, path` (from Source Video), `camera, time, duration` (s), `size_gb, resolution, fps` (from `_catalog.csv`), `lut` (cube name or null), `speech_sec`, `speech[]` (GigaAM segments, s/e in seconds), `sounds[]` (runs of the same top SoundAnalysis class, 3-s windows; `wind*` labels sum into `wind_sec`), `dark_share` (share of frames with mean brightness < 35), `motion` (mean frame difference), `scenes[]` (`key` = best frame file in the work folder, `key_t` its time, `sharp` 0–1 within the clip, `bright` 0–255, `vision`: labels with confidence ≥ 0.3, OCR text ru/en ≥ 3 chars, people, faces, `face_size` = tallest face as a share of frame height (> 0.3 ≈ talking head / selfie), `aesthetic`/`utility` when macOS provides them), `described[]` (Qwen3-VL per chunk ≤ 150 s: `что, где, кадр, теги, годится`; a non-JSON answer lands in `что`), `sheet`.
+Machine fields (video_map.py): `file, path` (from Source Video), `camera, time, duration` (s), `size_gb, resolution, fps` (from `_catalog.csv`), `lut` (cube name or null), `speech_sec`, `speech[]` (GigaAM segments, s/e in seconds), `sounds[]` (runs of the same top SoundAnalysis class, 3-s windows; `wind*` labels sum into `wind_sec`), `dark_share` (share of frames with mean brightness < 35), `motion` (mean frame difference), `scenes[]` (`key` = best frame file in the work folder, `key_t` its time, `sharp` 0–1 within the clip, `bright` 0–255, `vision`: labels with confidence ≥ 0.3, OCR text ru/en ≥ 3 chars, people, faces, `face_size` = tallest face as a share of frame height (> 0.3 ≈ talking head / selfie), `aesthetic`/`utility` when macOS provides them), `described[]` (Qwen3-VL per chunk ≤ 150 s: `что, где, кадр, теги, годится`; a non-JSON answer lands in `что`), `sheet`, `engines` (only when a clip was built with engines other than Apple's: `{capability: engine}` for feature_print, labels, ocr, people, faces, aesthetics, sound_events — scenes and labels of different engines are not comparable). `frames.json` in the work folder always records `engine` (feature prints), `threshold` and `engines`.
 
 Claude fields (kept across rebuilds): `summary`, `tags`, `rating`, `moments[{t, what}]`, `note`; day level `day_note{label, summary}` (written by vm_annotate.py — a later `assemble` does not carry it over, see pitfalls).
 

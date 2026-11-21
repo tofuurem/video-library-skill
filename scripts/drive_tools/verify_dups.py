@@ -40,6 +40,9 @@ def same_bytes(a, b):
 
 
 def main():
+    if len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return
     if len(sys.argv) != 3:
         raise SystemExit(__doc__)
     dup_dir = os.path.realpath(sys.argv[1])

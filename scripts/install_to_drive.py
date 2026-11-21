@@ -3,6 +3,7 @@
 
     python3 -I install_to_drive.py "/Volumes/<disk>"            # show the plan, touch nothing
     python3 -I install_to_drive.py "/Volumes/<disk>" --apply    # do it
+    (Linux: "/media/$USER/<disk>", "/run/media/$USER/<disk>", "/mnt/<disk>" or a folder in $VIDEO_LIBRARY_VOLUMES.)
 
 Creates what is missing: Source Video/{_inbox, _tools/reference, _logs}, Video Production, Video Archive, _docs.
 Tools: scripts/drive_tools/* -> Source Video/_tools/, assets/inbox/Разложить.command -> Source Video/_inbox/.
@@ -12,9 +13,12 @@ Tools: scripts/drive_tools/* -> Source Video/_tools/, assets/inbox/Разлож�
   different, drive copy not older   -> skipped and reported: it was changed on the drive. Bring that version
                                        into the skill first (cp -p), run selfcheck.py, then install again.
 Written only if missing (an existing file is never touched): Source Video/_inbox/КАК ПОЛЬЗОВАТЬСЯ.txt,
-CLAUDE.md and _docs/КАК ВЕСТИ ПРОЕКТЫ.md (templates from assets/templates, drive name filled in).
+CLAUDE.md, _docs/КАК ВЕСТИ ПРОЕКТЫ.md and _docs/КАРТА ВИДЕО.md (templates from assets/templates, drive name filled in).
+Not written here: _docs/ИНВЕНТАРИЗАЦИЯ.md and _docs/ИДЕИ РОЛИКОВ.md — Claude fills those templates by hand.
 Never moves, renames or deletes anything. With --apply writes the journal Source Video/_logs/install_<stamp>.tsv.
 --any-folder: allow a folder that is not a mounted volume (for a test in a scratch folder).
+Разложить.command is the macOS double-click launcher; on Linux it is copied too (the drive may meet a Mac) and sorting is
+run as python3 -I "Source Video/_tools/sort_inbox.py".
 """
 import argparse
 import datetime as dt
@@ -32,7 +36,8 @@ DIRS = ["Source Video", "Source Video/_inbox", "Source Video/_tools", "Source Vi
 # (template in assets, path on the drive) — written only when the drive has no such file
 TEMPLATES = [(os.path.join(ASSETS, "inbox", "КАК ПОЛЬЗОВАТЬСЯ.txt"), "Source Video/_inbox/КАК ПОЛЬЗОВАТЬСЯ.txt"),
              (os.path.join(ASSETS, "templates", "CLAUDE.md"), "CLAUDE.md"),
-             (os.path.join(ASSETS, "templates", "КАК ВЕСТИ ПРОЕКТЫ.md"), "_docs/КАК ВЕСТИ ПРОЕКТЫ.md")]
+             (os.path.join(ASSETS, "templates", "КАК ВЕСТИ ПРОЕКТЫ.md"), "_docs/КАК ВЕСТИ ПРОЕКТЫ.md"),
+             (os.path.join(ASSETS, "templates", "КАРТА ВИДЕО.md"), "_docs/КАРТА ВИДЕО.md")]
 
 
 def master_files():
@@ -49,15 +54,58 @@ def master_files():
     return out
 
 
+def volumes():
+    """Folders the drives are mounted in: $VIDEO_LIBRARY_VOLUMES (os.pathsep list), else the existing ones of /Volumes
+    (macOS), /media/$USER and /run/media/$USER (Linux desktops), /media (drives mounted without a user folder), /mnt.
+    A drive is a folder right inside one of them, or the folder itself when it directly holds Source Video; its name may
+    end in a space (copy it exactly). The same function is inlined in every tool that looks for drives."""
+    env = os.environ.get("VIDEO_LIBRARY_VOLUMES")
+    if env:
+        roots = env.split(os.pathsep)
+    else:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        if not user:
+            try:
+                import pwd
+                user = pwd.getpwuid(os.getuid()).pw_name
+            except (ImportError, KeyError):
+                pass
+        roots = ["/Volumes"] + (["/media/" + user, "/run/media/" + user] if user else []) + ["/media", "/mnt"]
+    out = []
+    for r in roots:
+        r = r.rstrip("/")
+        if r and r not in out and os.path.isdir(r):
+            out.append(r)
+    return out
+
+
+def drive_roots():
+    """[(drive name without a trailing space, its root)] of what is connected: every folder right inside a mount root of
+    volumes(), or the mount root itself when it directly holds Source Video (e.g. $VIDEO_LIBRARY_VOLUMES=/mnt/<Drive>).
+    Folders that are not drives (a user folder in /media, the system disk) are listed too: callers look inside."""
+    out = []
+    for v in volumes():
+        if os.path.isdir(os.path.join(v, "Source Video")):
+            out.append((os.path.basename(v).strip(), v))
+            continue
+        try:
+            names = sorted(os.listdir(v))
+        except OSError:
+            continue
+        out += [(n.strip(), os.path.join(v, n)) for n in names if not n.startswith(".") and os.path.isdir(os.path.join(v, n))]
+    return out
+
+
 def check_root(path, any_folder):
     root = os.path.abspath(path)
     if not os.path.isdir(root):
-        vols = ", ".join(repr(v) for v in sorted(os.listdir("/Volumes")))
-        sys.exit("No such folder: %r. Mounted volumes: %s (a name may end in a space — copy it exactly)." % (root, vols))
+        vols = ", ".join(repr(r) for _, r in drive_roots())
+        sys.exit("No such folder: %r. Mounted volumes: %s (a name may end in a space — copy it exactly)." % (root, vols or "none"))
     if os.path.realpath(root) == "/":
-        sys.exit("This is the Mac's system disk — not a place for the library.")
-    if not any_folder and (os.path.dirname(root) != "/Volumes" or not os.path.ismount(root)):
-        sys.exit("%r is not a mounted drive in /Volumes. For a test in an empty folder: --any-folder." % root)
+        sys.exit("This is the system disk — not a place for the library.")
+    if not any_folder and ((os.path.dirname(root) not in volumes() and root not in volumes()) or not os.path.ismount(root)):
+        sys.exit("%r is not a mounted drive in %s. For a test in an empty folder: --any-folder."
+                 % (root, " / ".join(volumes()) or "/Volumes, /media/$USER, /run/media/$USER, /mnt"))
     return root
 
 
@@ -84,9 +132,15 @@ def plan_for(root):
     return plan
 
 
+def shown_root(root):
+    """The drive root as written into files on the drive: /Volumes/<drive> on a Mac, else «<папка дисков>/<drive>» —
+    never this computer's mount folder (/media/<user>/… carries the user name, and the drive moves between computers)."""
+    return root if os.path.dirname(root) == "/Volumes" else "<папка дисков>/" + os.path.basename(root)
+
+
 def fill(text, root):
     return (text.replace("{{DISK}}", os.path.basename(root).strip())
-                .replace("{{ROOT}}", root)
+                .replace("{{ROOT}}", shown_root(root))
                 .replace("{{DATE}}", dt.date.today().strftime("%d.%m.%Y")))
 
 
@@ -135,7 +189,7 @@ def apply(plan, root):
                 f.write(fill(text, root))
         elif act not in ("mkdir", "conflict"):
             continue
-        journal.append((act, os.path.join(root, rel), note))
+        journal.append((act, rel, note))                 # relative to the drive root: no local mount path on the drive
     log = os.path.join(logs, "install_%s.tsv" % stamp)
     with open(log, "w", encoding="utf-8") as f:
         f.write("action\tpath\tnote\n")
